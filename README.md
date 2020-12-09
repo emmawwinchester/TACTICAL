@@ -1,2 +1,73 @@
 # TACTICAL
 implementation of TACTICAL for gwas tissue of specificity interrogation
+
+
+
+
+
+#guide to implementation of tactical
+source ~/.bashrc_miniconda3
+conda activate archr
+cd ~/cotney/analysis/tactical
+#first generating the files based on the input files from gregor
+
+
+
+#to generate the tissue path files, we ran this:
+
+cd ~/cotney/rawdata/chromatinsegmentations/human_18state/
+for sample in *dense.bed
+do
+export NAME=`echo $sample | sed 's/_/\t/g' | cut -f1`
+echo $NAME $sample | awk '{print $1, "/home/CAM/ewentworth/cotney/rawdata/chromatinsegmentations/human_18state/"$2}'>> ~/cotney/analysis/tactical/tissuepathfile.txt
+done
+
+
+#generate states.txt in order to generate tissue annotation file; if you're using 18 state can just copy and paste this one, otherwise you need to generate your own. 
+cut -f4 /home/CAM/ewentworth/cotney/rawdata/chromatinsegmentations/human_18state/12291.dense.bed | awk '!seen[$0]++' > ~/cotney/analysis/tactical/states.txt
+
+
+#generate tissue.txt file to generate the tissueannotationfile.txt
+awk '{print $1}' tissuepathfile.txt > tissue.txt
+
+#now we are running an UNWEIGHTED analysis, so for the tissue annotation file, the third column is set to 1, per the manual instructions. 
+
+for tissue in $(cat tissue.txt)
+do
+echo $tissue
+for state in $(cat states.txt)
+do
+echo $tissue $state "1" >> tissueannotationfile.txt
+done
+done
+
+#we want to look only at enhancers
+egrep -hi "enh" tissueannotationfile.txt | sed 's/ /\t/g' > temp.txt
+mv temp.txt tissueannotationfile.txt
+
+
+#now make the genomicpathfile.txt; this is the known gene coordinates. 
+coding        ~/cotney/genome/hg19/gencode.v19.annotation.genes.known.sorted.bed
+
+#now for genomic annotation file, which since we're doing unweighted is just the following:
+coding	1
+
+
+#this block generates the SNP files while ALSO starting the Rscript that runs tactical for each set of SNPs. 
+
+
+
+
+#for this block of text, nothing needs to be edited. just make sure that all your SNPs.txt files are in the directory with the name format "diseaseSNPs.txt", and the tsv obtained DIRECTLY from Gwas catalog is named "disease.tsv". 
+for sample in *SNPs.txt
+do
+export DISEASE=`echo $sample | sed 's/SNPs.txt//g'`
+echo $DISEASE
+echo "SIGNAL" "SNPID" "CHR" "POS" "VALUE" | sed 's/ /\t/g' > $DISEASE-SNPfile.txt
+egrep -f $sample $DISEASE.tsv | cut -f12,13,28 | egrep "1|2|3|4|5|6|7|8|9|0" | sed 's/^/chr/g' | awk '{print NR"_1", $1":"$2, $1, $2, "1"}' | sed 's/ /\t/g' >> $DISEASE-SNPfile.txt
+
+echo -e "library(TACTICAL)\n$DISEASE<-annotate_snps(snp_file='"$DISEASE-SNPfile.txt"', tissue_path_file='"tissuepathfile.txt"', tissue_annotation_file='"tissueannotationfile.txt"', genomic_path_file='"genomicpathfile.txt"', genomic_annotation_file='"genomeannotationfile.txt"')\ntest2<-calculate_tissue_vectors(snp.annotated.df=$DISEASE, tissue_annotation_file='"tissueannotationfile.txt"', genomic_annotation_file='"genomeannotationfile.txt"')\ntest3<-calculate_toa_scores(snp.tissvec.df=test2)\ntest4<-tissue_classifier(toa.df=test3, tissue_threshold=0.2, shared_threshold=0.1)\nlibrary(ggplot2)\nlibrary(gridExtra)\npr.out<-prcomp(dplyr::select(test3, -one_of('"SIGNAL"')), scale=TRUE)\npca.df<-as.data.frame(pr.out\$x)\npca.df$classification <-test4$classification\npdf(file='"$DISEASE.pdf"')\npltA<-ggplot(data=dplyr::filter(pca.df, classification!='"unclassified"'), aes(x=PC1, y=PC2, fill=classification))+ geom_point(shape=21, alpha=0.8, color='"black"', size=2) + scale_fill_brewer(palette='"Set1"', name='"$DISEASE Assigned Tissue"') + theme_classic()\npltB<-ggplot(data=dplyr::filter(pca.df, classification!='"unclassified"'), aes(x=PC2, y=PC3, fill=classification))+ geom_point(shape=21, alpha=0.8, color='"black"', size=2) + scale_fill_brewer(palette='"Set1"', name='"$DISEASE Assigned Tissue"') + theme_classic()\ngrid.arrange(pltA, pltB, nrow=2)\ndev.off()" > $DISEASE-TACTICAL.Rscript
+Rscript $DISEASE-TACTICAL.Rscript
+done
+
+conda deactivate
